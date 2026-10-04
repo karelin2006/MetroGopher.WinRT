@@ -1,166 +1,854 @@
-﻿using MetroGopher.WinRT.Common;
-using MetroGopher.WinRT.Data;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
-using Windows.ApplicationModel.Resources;
-using Windows.Foundation;
+using System.Threading.Tasks;
+using Windows.Data.Xml.Dom;
 using Windows.Foundation.Collections;
-using Windows.Graphics.Display;
+using Windows.Media.Playback;
+using Windows.Phone.UI.Input;
+using Windows.Storage;
+using Windows.System;
+using Windows.UI.Notifications;
+using Windows.UI.Popups;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
-using Windows.UI.Xaml.Controls.Primitives;
-using Windows.UI.Xaml.Data;
-using Windows.UI.Xaml.Input;
-using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Navigation;
-
-// The Pivot Application template is documented at http://go.microsoft.com/fwlink/?LinkID=391641
+using MetroGopher.WinRT.Models;
+using MetroGopher.WinRT.Services;
 
 namespace MetroGopher.WinRT
 {
     public sealed partial class PivotPage : Page
     {
-        private const string FirstGroupName = "FirstGroup";
-        private const string SecondGroupName = "SecondGroup";
+        private readonly GopherClient _client = new GopherClient();
+        private readonly Stack<GopherHistoryItem> _historyStack = new Stack<GopherHistoryItem>();
+        private bool _isNavigatingHistory = false;
 
-        private readonly NavigationHelper navigationHelper;
-        private readonly ObservableDictionary defaultViewModel = new ObservableDictionary();
-        private readonly ResourceLoader resourceLoader = ResourceLoader.GetForCurrentView("Resources");
+        private string _currentHost = "gopher.floodgap.com";
+        private int _currentPort = 70;
+        private string _currentSelector = "";
+        private GopherItem _currentDocument = null;
+
+        private readonly DispatcherTimer _autoRefreshTimer = new DispatcherTimer();
+
+        // Альбомный плейлист текущей папки
+        private readonly List<GopherItem> _currentPlaylist = new List<GopherItem>();
+        private int _currentTrackIndex = -1;
+
+        private readonly string[] _knownGopherServers =
+        {
+            "ezhe.ddns.net", "gopher.debene.dev", "gopher.floodgap.com", "sdf.org", "gopher.viste.fr",
+            "bitreich.org", "quux.org", "gopher.black", "gopher.navigo.com", "1436.ninja", "gopher.club",
+            "gopher.ddis.ch", "gopher.fman.com", "hngopher.com", "gopher.linkerror.com", "magical.city",
+            "gopher.tildeverse.org", "gopher.icu", "gopher.top", "phreaknet.org", "gopher.space"
+        };
+
+        public ObservableCollection<GopherBookmark> Bookmarks { get; set; }
+        public ObservableCollection<GopherHistoryItem> History { get; set; }
+        private ObservableCollection<GopherItem> _gopherItems = new ObservableCollection<GopherItem>();
+
+        private const string BookmarksKey = "SavedBookmarks";
+        private const string HistoryKey = "SavedHistory";
 
         public PivotPage()
         {
             this.InitializeComponent();
-
             this.NavigationCacheMode = NavigationCacheMode.Required;
 
-            this.navigationHelper = new NavigationHelper(this);
-            this.navigationHelper.LoadState += this.NavigationHelper_LoadState;
-            this.navigationHelper.SaveState += this.NavigationHelper_SaveState;
+            Bookmarks = new ObservableCollection<GopherBookmark>();
+            History = new ObservableCollection<GopherHistoryItem>();
+
+            LoadData();
+
+            _autoRefreshTimer.Interval = TimeSpan.FromSeconds(5);
+            _autoRefreshTimer.Tick += (s, ev) => SilentRefreshDocument();
+
+            GopherList.ItemsSource = _gopherItems;
+            BookmarksList.ItemsSource = Bookmarks;
+            HistoryList.ItemsSource = History;
+
+            BackgroundMediaPlayer.MessageReceivedFromBackground += OnMediaPlayerMessageReceived;
+            HardwareButtons.BackPressed += HardwareButtons_BackPressed;
+
+            LoadGopherPage(_currentHost, _currentPort, _currentSelector);
         }
 
-        /// <summary>
-        /// Gets the <see cref="NavigationHelper"/> associated with this <see cref="Page"/>.
-        /// </summary>
-        public NavigationHelper NavigationHelper
+        #region Обработка кнопки Назад
+
+        private void HardwareButtons_BackPressed(object sender, BackPressedEventArgs e)
         {
-            get { return this.navigationHelper; }
-        }
-
-        /// <summary>
-        /// Gets the view model for this <see cref="Page"/>.
-        /// This can be changed to a strongly typed view model.
-        /// </summary>
-        public ObservableDictionary DefaultViewModel
-        {
-            get { return this.defaultViewModel; }
-        }
-
-        /// <summary>
-        /// Populates the page with content passed during navigation. Any saved state is also
-        /// provided when recreating a page from a prior session.
-        /// </summary>
-        /// <param name="sender">
-        /// The source of the event; typically <see cref="NavigationHelper"/>.
-        /// </param>
-        /// <param name="e">Event data that provides both the navigation parameter passed to
-        /// <see cref="Frame.Navigate(Type, Object)"/> when this page was initially requested and
-        /// a dictionary of state preserved by this page during an earlier
-        /// session. The state will be null the first time a page is visited.</param>
-        private async void NavigationHelper_LoadState(object sender, LoadStateEventArgs e)
-        {
-            // TODO: Create an appropriate data model for your problem domain to replace the sample data
-            var sampleDataGroup = await SampleDataSource.GetGroupAsync("Group-1");
-            this.DefaultViewModel[FirstGroupName] = sampleDataGroup;
-        }
-
-        /// <summary>
-        /// Preserves state associated with this page in case the application is suspended or the
-        /// page is discarded from the navigation cache. Values must conform to the serialization
-        /// requirements of <see cref="SuspensionManager.SessionState"/>.
-        /// </summary>
-        /// <param name="sender">The source of the event; typically <see cref="NavigationHelper"/>.</param>
-        /// <param name="e">Event data that provides an empty dictionary to be populated with
-        /// serializable state.</param>
-        private void NavigationHelper_SaveState(object sender, SaveStateEventArgs e)
-        {
-            // TODO: Save the unique state of the page here.
-        }
-
-        /// <summary>
-        /// Adds an item to the list when the app bar button is clicked.
-        /// </summary>
-        private void AddAppBarButton_Click(object sender, RoutedEventArgs e)
-        {
-            string groupName = this.pivot.SelectedIndex == 0 ? FirstGroupName : SecondGroupName;
-            var group = this.DefaultViewModel[groupName] as SampleDataGroup;
-            var nextItemId = group.Items.Count + 1;
-            var newItem = new SampleDataItem(
-                string.Format(CultureInfo.InvariantCulture, "Group-{0}-Item-{1}", this.pivot.SelectedIndex + 1, nextItemId),
-                string.Format(CultureInfo.CurrentCulture, this.resourceLoader.GetString("NewItemTitle"), nextItemId),
-                string.Empty,
-                string.Empty,
-                this.resourceLoader.GetString("NewItemDescription"),
-                string.Empty);
-
-            group.Items.Add(newItem);
-
-            // Scroll the new item into view.
-            var container = this.pivot.ContainerFromIndex(this.pivot.SelectedIndex) as ContentControl;
-            var listView = container.ContentTemplateRoot as ListView;
-            listView.ScrollIntoView(newItem, ScrollIntoViewAlignment.Leading);
-        }
-
-        /// <summary>
-        /// Invoked when an item within a section is clicked.
-        /// </summary>
-        private void ItemView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            // Navigate to the appropriate destination page, configuring the new page
-            // by passing required information as a navigation parameter
-            var itemId = ((SampleDataItem)e.ClickedItem).UniqueId;
-            if (!Frame.Navigate(typeof(ItemPage), itemId))
+            if (MainPivot.SelectedItem == PivotDocument)
             {
-                throw new Exception(this.resourceLoader.GetString("NavigationFailedExceptionMessage"));
+                MainPivot.SelectedIndex = 0;
+                _currentDocument = null;
+                _autoRefreshTimer.Stop();
+                e.Handled = true;
+                return;
+            }
+
+            if (_historyStack.Count > 1)
+            {
+                e.Handled = true;
+                _historyStack.Pop();
+                var previousPage = _historyStack.Peek();
+                _isNavigatingHistory = true;
+                LoadGopherPage(previousPage.Host, previousPage.Port, previousPage.Selector, false);
             }
         }
 
-        /// <summary>
-        /// Loads the content for the second pivot item when it is scrolled into view.
-        /// </summary>
-        private async void SecondPivot_Loaded(object sender, RoutedEventArgs e)
+        #endregion
+
+        #region Отображение данных
+
+        private void DisplayLongText(string text)
         {
-            var sampleDataGroup = await SampleDataSource.GetGroupAsync("Group-2");
-            this.DefaultViewModel[SecondGroupName] = sampleDataGroup;
+            if (string.IsNullOrEmpty(text))
+            {
+                DocumentListBox.ItemsSource = null;
+                return;
+            }
+
+            var rawLines = text.Split(new[] { '\n' }, StringSplitOptions.None);
+            bool isAsciiMap = DetectIfAsciiMap(rawLines);
+
+            var items = new List<FormattedTextLine>();
+            bool previousWasEmpty = false;
+
+            foreach (var rawLine in rawLines)
+            {
+                string line = rawLine.TrimEnd('\r');
+                bool isEmpty = string.IsNullOrWhiteSpace(line);
+
+                // Если уже была пустая строка, вторую и последующие подряд отбрасываем
+                if (isEmpty && previousWasEmpty)
+                {
+                    continue;
+                }
+
+                items.Add(new FormattedTextLine
+                {
+                    Text = line,
+                    IsAsciiArt = isAsciiMap
+                });
+
+                previousWasEmpty = isEmpty;
+            }
+
+            DocumentListBox.ItemsSource = items;
+            MainPivot.SelectedItem = PivotDocument;
         }
 
-        #region NavigationHelper registration
-
-        /// <summary>
-        /// The methods provided in this section are simply used to allow
-        /// NavigationHelper to respond to the page's navigation methods.
-        /// <para>
-        /// Page specific logic should be placed in event handlers for the  
-        /// <see cref="NavigationHelper.LoadState"/>
-        /// and <see cref="NavigationHelper.SaveState"/>.
-        /// The navigation parameter is available in the LoadState method 
-        /// in addition to page state preserved during an earlier session.
-        /// </para>
-        /// </summary>
-        /// <param name="e">Provides data for navigation methods and event
-        /// handlers that cannot cancel the navigation request.</param>
-        protected override void OnNavigatedTo(NavigationEventArgs e)
+        private bool DetectIfAsciiMap(string[] lines)
         {
-            this.navigationHelper.OnNavigatedTo(e);
+            int asciiIndicators = 0;
+            int sampleCount = Math.Min(lines.Length, 60);
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                string line = lines[i];
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                int mapChars = line.Count(c => c == '=' || c == '|' || c == '+' || c == '-' || c == '/' || c == '\\' || c == '[' || c == ']' || c == '<' || c == '>');
+
+                if (mapChars >= 6 || line.Contains("===") || line.Contains("---") || line.Contains("..."))
+                {
+                    asciiIndicators++;
+                }
+            }
+
+            return asciiIndicators > (sampleCount * 0.15);
         }
 
-        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        #endregion
+
+        #region Хранилище ApplicationData
+
+        private void LoadData()
         {
-            this.navigationHelper.OnNavigatedFrom(e);
+            var settings = ApplicationData.Current.LocalSettings.Values;
+
+            if (settings.ContainsKey(BookmarksKey))
+            {
+                string savedBookmarks = settings[BookmarksKey] as string;
+                if (!string.IsNullOrEmpty(savedBookmarks))
+                {
+                    Bookmarks.Clear();
+                    string[] lines = savedBookmarks.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var item in lines)
+                    {
+                        var parts = item.Split('|');
+                        if (parts.Length >= 5)
+                        {
+                            int port;
+                            if (!int.TryParse(parts[2], out port) || port <= 0)
+                                port = 70;
+
+                            GopherItemType itemType = GopherItemType.Directory;
+                            try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[4]); } catch { }
+
+                            Bookmarks.Add(new GopherBookmark
+                            {
+                                Title = parts[0],
+                                Host = parts[1],
+                                Port = port,
+                                Selector = parts[3],
+                                ItemType = itemType
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (settings.ContainsKey(HistoryKey))
+            {
+                string savedHistory = settings[HistoryKey] as string;
+                if (!string.IsNullOrEmpty(savedHistory))
+                {
+                    History.Clear();
+                    string[] lines = savedHistory.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var item in lines)
+                    {
+                        var parts = item.Split('|');
+                        if (parts.Length >= 3)
+                        {
+                            int port;
+                            if (!int.TryParse(parts[1], out port) || port <= 0)
+                                port = 70;
+
+                            GopherItemType itemType = GopherItemType.Directory;
+                            if (parts.Length >= 4)
+                            {
+                                try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[3]); } catch { }
+                            }
+
+                            History.Add(new GopherHistoryItem { Host = parts[0], Port = port, Selector = parts[2], ItemType = itemType });
+                        }
+                    }
+                }
+            }
+        }
+
+        private void SaveData()
+        {
+            var settings = ApplicationData.Current.LocalSettings.Values;
+
+            string bookmarksPayload = string.Join("\n", Bookmarks.Select(b =>
+                string.Format("{0}|{1}|{2}|{3}|{4}", b.Title, b.Host, b.Port, b.Selector, b.ItemType)));
+
+            string historyPayload = string.Join("\n", History.Select(h =>
+                string.Format("{0}|{1}|{2}|{3}", h.Host, h.Port, h.Selector, h.ItemType)));
+
+            settings[BookmarksKey] = bookmarksPayload;
+            settings[HistoryKey] = historyPayload;
+        }
+
+        private void SaveToPermanentHistory(string host, int port, string selector, GopherItemType type)
+        {
+            if (string.IsNullOrEmpty(host) || _isNavigatingHistory) return;
+
+            var existing = History.FirstOrDefault(h => h.Host == host && h.Port == port && h.Selector == selector);
+            if (existing != null)
+            {
+                History.Remove(existing);
+            }
+
+            History.Insert(0, new GopherHistoryItem { Host = host, Port = port, Selector = selector, ItemType = type });
+
+            if (History.Count > 100)
+            {
+                History.RemoveAt(History.Count - 1);
+            }
+
+            SaveData();
+        }
+
+        #endregion
+
+        #region Навигация
+
+        private void OnGoClick(object sender, RoutedEventArgs e)
+        {
+            ExecuteAddressNavigation(AddressBox.Text.Trim());
+        }
+
+        private void AddressBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
+        {
+            if (args.SelectedItem != null)
+            {
+                ExecuteAddressNavigation(args.SelectedItem.ToString());
+            }
+        }
+
+        private void AddressBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+        {
+            if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+            {
+                string query = sender.Text.ToLowerInvariant();
+                var suggestions = _knownGopherServers
+                    .Concat(History.Select(h => h.Host))
+                    .Where(s => s.ToLowerInvariant().Contains(query))
+                    .Distinct()
+                    .Take(5)
+                    .ToList();
+                sender.ItemsSource = suggestions;
+            }
+        }
+
+        private void ExecuteAddressNavigation(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return;
+
+            if (!input.Contains(".") && !input.Contains(":") && !input.Contains("/"))
+            {
+                LoadGopherPage("gopher.floodgap.com", 70, "/v2/vs\t" + input);
+                return;
+            }
+
+            string host;
+            int port;
+            string selector;
+            ParseAddress(input, out host, out port, out selector);
+            LoadGopherPage(host, port, selector);
+        }
+
+        private void ParseAddress(string input, out string host, out int port, out string selector)
+        {
+            host = _currentHost;
+            port = _currentPort;
+            selector = "";
+
+            if (string.IsNullOrWhiteSpace(input)) return;
+
+            string s = input.Trim();
+            if (s.StartsWith("gopher://", StringComparison.OrdinalIgnoreCase))
+                s = s.Substring(9);
+
+            int slash = s.IndexOf('/');
+            if (slash >= 0)
+            {
+                selector = s.Substring(slash);
+                s = s.Substring(0, slash);
+            }
+
+            int colon = s.LastIndexOf(':');
+            if (colon > 0 && colon < s.Length - 1)
+            {
+                host = s.Substring(0, colon);
+                int parsedPort;
+                if (int.TryParse(s.Substring(colon + 1), out parsedPort) && parsedPort > 0)
+                    port = parsedPort;
+                else
+                    port = 70;
+            }
+            else if (!string.IsNullOrEmpty(s))
+            {
+                host = s;
+            }
+        }
+
+        private async void LoadGopherPage(string host, int port, string selector, bool addToHistory = true, bool forceRefresh = false)
+        {
+            _currentHost = host;
+            _currentPort = port;
+            _currentSelector = selector;
+            _currentDocument = null;
+
+            LoadingBar.Visibility = Visibility.Visible;
+            _gopherItems.Clear();
+
+            string displaySelector = selector.Contains("\t") ? selector.Split('\t')[0] : selector;
+            AddressBox.Text = port == 70 ? host + displaySelector : string.Format("{0}:{1}{2}", host, port, displaySelector);
+
+            if (addToHistory && !_isNavigatingHistory && !string.IsNullOrEmpty(host))
+            {
+                _historyStack.Push(new GopherHistoryItem { Host = host, Port = port, Selector = selector, ItemType = GopherItemType.Directory });
+                SaveToPermanentHistory(host, port, selector, GopherItemType.Directory);
+            }
+
+            try
+            {
+                var items = await _client.GetDirectoryAsync(host, port, selector);
+
+                _currentPlaylist.Clear();
+                _currentTrackIndex = -1;
+
+                foreach (var item in items)
+                {
+                    _gopherItems.Add(item);
+                    if (item.ItemType == GopherItemType.Audio)
+                    {
+                        _currentPlaylist.Add(item);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                var dlg = new MessageDialog(ex.Message, "Network Error");
+                await dlg.ShowAsync();
+            }
+            finally
+            {
+                LoadingBar.Visibility = Visibility.Collapsed;
+                _isNavigatingHistory = false;
+            }
+        }
+
+        #endregion
+
+        #region Диспетчеризация элементов меню
+
+        private async void OnGopherItemClicked(object sender, ItemClickEventArgs e)
+        {
+            var item = e.ClickedItem as GopherItem;
+            if (item == null) return;
+
+            switch (item.ItemType)
+            {
+                case GopherItemType.Directory:
+                    LoadGopherPage(item.Host, item.Port, item.Selector);
+                    break;
+                case GopherItemType.TextFile:
+                    await OpenTextFileAsync(item);
+                    break;
+                case GopherItemType.Audio:
+                    await PlayAudioAsync(item);
+                    break;
+                case GopherItemType.Search:
+                    ShowSearchDialog(item);
+                    break;
+                case GopherItemType.HtmlLink:
+                    OpenWebLink(item);
+                    break;
+                case GopherItemType.Telnet:
+                    OpenTelnet(item);
+                    break;
+                default:
+                    await DownloadAndSaveFileAsync(item);
+                    break;
+            }
+        }
+
+        #endregion
+
+        #region Фоновое аудио (Кэширование + Предзагрузка + Toast)
+
+        private void ShowTrackToast(string title, string artist)
+        {
+            try
+            {
+                XmlDocument toastXml = ToastNotificationManager.GetTemplateContent(ToastTemplateType.ToastText02);
+                var textNodes = toastXml.GetElementsByTagName("text");
+                textNodes[0].AppendChild(toastXml.CreateTextNode("▶ " + (title ?? "Audio Track")));
+                textNodes[1].AppendChild(toastXml.CreateTextNode(artist ?? "MetroGopher"));
+
+                // Отключаем звук тоста, чтобы не глушить воспроизводимую музыку
+                var audioElement = toastXml.CreateElement("audio");
+                audioElement.SetAttribute("silent", "true");
+                toastXml.DocumentElement.AppendChild(audioElement);
+
+                ToastNotification toast = new ToastNotification(toastXml);
+                ToastNotificationManager.CreateToastNotifier().Show(toast);
+            }
+            catch { }
+        }
+
+        private string GetCacheFileName(GopherItem item)
+        {
+            uint hash = 2166136261;
+            string key = item.Host + "_" + item.Selector;
+            foreach (char c in key)
+            {
+                hash = (hash ^ c) * 16777619;
+            }
+            return string.Format("cache_{0:X}.mp3", hash);
+        }
+
+        private async Task<StorageFile> GetOrDownloadTrackAsync(GopherItem item)
+        {
+            string cacheName = GetCacheFileName(item);
+            StorageFolder folder = ApplicationData.Current.LocalFolder;
+
+            try
+            {
+                var existing = await folder.GetFileAsync(cacheName);
+                var props = await existing.GetBasicPropertiesAsync();
+                if (props.Size > 0)
+                {
+                    return existing;
+                }
+            }
+            catch { }
+
+            return await _client.DownloadBinaryToFileAsync(item.Host, item.Port, item.Selector, cacheName);
+        }
+
+        private void PrefetchNextTrack()
+        {
+            int nextIndex = _currentTrackIndex + 1;
+            if (nextIndex < _currentPlaylist.Count)
+            {
+                var nextItem = _currentPlaylist[nextIndex];
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        await GetOrDownloadTrackAsync(nextItem);
+                    }
+                    catch { }
+                });
+            }
+        }
+
+        private async Task PlayAudioAsync(GopherItem item)
+        {
+            if (item == null) return;
+
+            _currentTrackIndex = _currentPlaylist.IndexOf(item);
+            await PlayTrackAtIndexAsync(_currentTrackIndex >= 0 ? _currentTrackIndex : 0, item);
+        }
+
+        private async Task PlayTrackAtIndexAsync(int index, GopherItem directItem = null)
+        {
+            GopherItem targetTrack = directItem;
+
+            if (targetTrack == null && index >= 0 && index < _currentPlaylist.Count)
+            {
+                targetTrack = _currentPlaylist[index];
+                _currentTrackIndex = index;
+            }
+
+            if (targetTrack == null) return;
+
+            LoadingBar.Visibility = Visibility.Visible;
+
+            try
+            {
+                // Загружаем из локального дискового кэша или быстро скачиваем
+                StorageFile trackFile = await GetOrDownloadTrackAsync(targetTrack);
+
+                var fileProps = await trackFile.GetBasicPropertiesAsync();
+                if (fileProps.Size == 0)
+                {
+                    var emptyDlg = new MessageDialog("Файл пуст (0 байт)", "Ошибка аудио");
+                    await emptyDlg.ShowAsync();
+                    return;
+                }
+
+                // Гарантируем запуск фонового процесса
+                var dummyState = BackgroundMediaPlayer.Current.CurrentState;
+
+                var msg = new ValueSet();
+                msg.Add("command", "play");
+                msg.Add("fileName", trackFile.Name);
+                msg.Add("title", targetTrack.Title ?? "Audio Track");
+                msg.Add("artist", targetTrack.Host ?? "Gopher Server");
+
+                BackgroundMediaPlayer.SendMessageToBackground(msg);
+
+                // Показываем тихое системное уведомление сверху
+                ShowTrackToast(targetTrack.Title, targetTrack.Host);
+
+                // Запускаем предзагрузку следующего трека в фоне
+                PrefetchNextTrack();
+            }
+            catch (Exception ex)
+            {
+                var dlg = new MessageDialog("Ошибка аудио:\n" + ex.Message, "Player Error");
+                await dlg.ShowAsync();
+            }
+            finally
+            {
+                LoadingBar.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private async void PlayNextTrackAsync()
+        {
+            if (_currentPlaylist.Count == 0) return;
+
+            int nextIndex = _currentTrackIndex + 1;
+            if (nextIndex < _currentPlaylist.Count)
+            {
+                await PlayTrackAtIndexAsync(nextIndex);
+            }
+        }
+
+        private async void PlayPreviousTrackAsync()
+        {
+            if (_currentPlaylist.Count == 0) return;
+
+            int prevIndex = _currentTrackIndex - 1;
+            if (prevIndex >= 0)
+            {
+                await PlayTrackAtIndexAsync(prevIndex);
+            }
+            else
+            {
+                await PlayTrackAtIndexAsync(0);
+            }
+        }
+
+        private async void OnMediaPlayerMessageReceived(object sender, MediaPlayerDataReceivedEventArgs e)
+        {
+            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
+            {
+                if (e.Data.ContainsKey("event"))
+                {
+                    string ev = e.Data["event"] as string;
+                    if (ev == "track_ended" || ev == "user_next")
+                    {
+                        PlayNextTrackAsync();
+                    }
+                    else if (ev == "user_previous")
+                    {
+                        PlayPreviousTrackAsync();
+                    }
+                }
+            });
+        }
+
+        #endregion
+
+        #region Форматы текста, ссылок и Telnet
+
+        private async Task OpenTextFileAsync(GopherItem item)
+        {
+            LoadingBar.Visibility = Visibility.Visible;
+            SaveToPermanentHistory(item.Host, item.Port, item.Selector, item.ItemType);
+
+            try
+            {
+                var file = await _client.DownloadBinaryToFileAsync(item.Host, item.Port, item.Selector, "temp_doc.txt");
+                string content = await FileIO.ReadTextAsync(file);
+
+                DisplayLongText(content);
+                _currentDocument = item;
+            }
+            catch (Exception ex)
+            {
+                var dlg = new MessageDialog("Не удалось открыть файл:\n" + ex.Message, "Error");
+                await dlg.ShowAsync();
+            }
+            finally
+            {
+                LoadingBar.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private async void OpenWebLink(GopherItem item)
+        {
+            string url = item.Selector;
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            if (url.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
+                url = url.Substring(4);
+
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                url = "http://" + url;
+
+            Uri uri;
+            if (Uri.TryCreate(url, UriKind.Absolute, out uri))
+            {
+                await Launcher.LaunchUriAsync(uri);
+            }
+        }
+
+        private async void OpenTelnet(GopherItem item)
+        {
+            string telnetUri = string.Format("telnet://{0}:{1}", item.Host, item.Port);
+            try
+            {
+                await Launcher.LaunchUriAsync(new Uri(telnetUri));
+            }
+            catch
+            {
+                var dlg = new MessageDialog(string.Format("Сессия Telnet:\nХост: {0}\nПорт: {1}\nСелектор: {2}", item.Host, item.Port, item.Selector), "Telnet");
+                await dlg.ShowAsync();
+            }
+        }
+
+        private async void ShowSearchDialog(GopherItem item)
+        {
+            var inputTextBox = new TextBox { PlaceholderText = "Поисковый запрос" };
+            var dialog = new ContentDialog
+            {
+                Title = item.Title ?? "GOPHER SEARCH",
+                Content = inputTextBox,
+                PrimaryButtonText = "Поиск",
+                SecondaryButtonText = "Отмена"
+            };
+
+            var res = await dialog.ShowAsync();
+            if (res == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(inputTextBox.Text))
+            {
+                string searchSelector = item.Selector + "\t" + inputTextBox.Text.Trim();
+                LoadGopherPage(item.Host, item.Port, searchSelector);
+            }
+        }
+
+        private async Task DownloadAndSaveFileAsync(GopherItem item)
+        {
+            LoadingBar.Visibility = Visibility.Visible;
+            SaveToPermanentHistory(item.Host, item.Port, item.Selector, item.ItemType);
+
+            try
+            {
+                string safeName = MakeSafeFileName(item.Title, item.ItemType);
+                await _client.DownloadBinaryToFileAsync(item.Host, item.Port, item.Selector, safeName);
+
+                var dlg = new MessageDialog(string.Format("Файл успешно сохранен в хранилище приложения:\n{0}", safeName), "Загрузка завершена");
+                await dlg.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                var dlg = new MessageDialog("Ошибка загрузки:\n" + ex.Message, "Error");
+                await dlg.ShowAsync();
+            }
+            finally
+            {
+                LoadingBar.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private string MakeSafeFileName(string title, GopherItemType type)
+        {
+            if (string.IsNullOrWhiteSpace(title)) title = "file";
+            foreach (char c in Path.GetInvalidFileNameChars())
+                title = title.Replace(c, '_');
+
+            title = title.Trim();
+            if (title.Length > 60) title = title.Substring(0, 60);
+
+            string ext = Path.GetExtension(title);
+            if (string.IsNullOrEmpty(ext))
+            {
+                ext = type == GopherItemType.Audio ? ".mp3" : ".dat";
+                title += ext;
+            }
+            return title;
+        }
+
+        #endregion
+
+        #region Дополнительные обработчики
+
+        private void OnPivotSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (MainPivot.SelectedItem == PivotDocument)
+            {
+                _autoRefreshTimer.Start();
+            }
+            else
+            {
+                _autoRefreshTimer.Stop();
+            }
+        }
+
+        private async void SilentRefreshDocument()
+        {
+            if (_currentDocument == null || MainPivot.SelectedItem != PivotDocument) return;
+
+            try
+            {
+                var file = await _client.DownloadBinaryToFileAsync(_currentDocument.Host, _currentDocument.Port, _currentDocument.Selector, "temp_doc.txt");
+                string content = await FileIO.ReadTextAsync(file);
+                DisplayLongText(content);
+            }
+            catch { }
+        }
+
+        private async void OnBookmarkClick(object sender, RoutedEventArgs e)
+        {
+            var bm = new GopherBookmark
+            {
+                Title = string.IsNullOrWhiteSpace(AddressBox.Text) ? "Page" : AddressBox.Text,
+                Host = _currentHost,
+                Port = _currentPort,
+                Selector = _currentSelector,
+                ItemType = GopherItemType.Directory
+            };
+
+            Bookmarks.Add(bm);
+            SaveData();
+
+            var dlg = new MessageDialog("Страница сохранена в закладки!", "Закладки");
+            await dlg.ShowAsync();
+        }
+
+        private void OnBookmarkSelected(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn == null) return;
+            var bm = btn.Tag as GopherBookmark;
+            if (bm == null) return;
+
+            MainPivot.SelectedIndex = 0;
+            LoadGopherPage(bm.Host, bm.Port, bm.Selector);
+        }
+
+        private void OnDeleteBookmarkClick(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn == null) return;
+            var bm = btn.Tag as GopherBookmark;
+            if (bm == null) return;
+
+            Bookmarks.Remove(bm);
+            SaveData();
+        }
+
+        private void OnClearBookmarksClick(object sender, RoutedEventArgs e)
+        {
+            Bookmarks.Clear();
+            SaveData();
+        }
+
+        private void OnHistorySelected(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn == null) return;
+            var h = btn.Tag as GopherHistoryItem;
+            if (h == null) return;
+
+            MainPivot.SelectedIndex = 0;
+            LoadGopherPage(h.Host, h.Port, h.Selector);
+        }
+
+        private void OnDeleteHistoryItemClick(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn == null) return;
+            var h = btn.Tag as GopherHistoryItem;
+            if (h == null) return;
+
+            History.Remove(h);
+            SaveData();
+        }
+
+        private void OnClearHistoryClick(object sender, RoutedEventArgs e)
+        {
+            History.Clear();
+            SaveData();
+        }
+
+        private void OnRefreshClick(object sender, RoutedEventArgs e)
+        {
+            if (MainPivot.SelectedItem == PivotDocument && _currentDocument != null)
+            {
+                SilentRefreshDocument();
+            }
+            else if (MainPivot.SelectedIndex == 0 && !string.IsNullOrEmpty(_currentHost))
+            {
+                LoadGopherPage(_currentHost, _currentPort, _currentSelector, false, true);
+            }
+        }
+
+        private void OnHomeClick(object sender, RoutedEventArgs e)
+        {
+            MainPivot.SelectedIndex = 0;
+            LoadGopherPage("gopher.floodgap.com", 70, "");
         }
 
         #endregion

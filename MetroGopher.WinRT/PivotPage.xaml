@@ -5,87 +5,190 @@
     xmlns:local="using:MetroGopher.WinRT"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    xmlns:data="using:MetroGopher.WinRT.Data"
     mc:Ignorable="d"
-    DataContext="{Binding DefaultViewModel, RelativeSource={RelativeSource Self}}"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-    <Page.Transitions>
-        <TransitionCollection>
-            <NavigationThemeTransition>
-                <NavigationThemeTransition.DefaultNavigationTransitionInfo>
-                    <CommonNavigationTransitionInfo IsStaggeringEnabled="True"/>
-                </NavigationThemeTransition.DefaultNavigationTransitionInfo>
-            </NavigationThemeTransition>
-        </TransitionCollection>
-    </Page.Transitions>
 
-    <Grid>
-        <Pivot x:Uid="Pivot" Title="MY APPLICATION" x:Name="pivot" CommonNavigationTransitionInfo.IsStaggerElement="True">
-            <!--Pivot item one-->
-            <PivotItem
-                x:Uid="PivotItem1"
-                Margin="19,14.5,0,0"
-                Header="first"
-                DataContext="{Binding FirstGroup}"
-                d:DataContext="{Binding Groups[0], Source={d:DesignData Source=/DataModel/SampleData.json, Type=data:SampleDataSource}}"
-                CommonNavigationTransitionInfo.IsStaggerElement="True">
-                <!--Double line list with text wrapping-->
-                <ListView
-                    ItemsSource="{Binding Items}"
-                    IsItemClickEnabled="True"
-                    ItemClick="ItemView_ItemClick"
-                    ContinuumNavigationTransitionInfo.ExitElementContainer="True">
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Margin="0,0,0,9.5">
-                                <TextBlock
-                                    Text="{Binding Title}"
-                                    TextWrapping="Wrap"
-                                    Pivot.SlideInAnimationGroup="1"
-                                    CommonNavigationTransitionInfo.IsStaggerElement="True"
-                                    Style="{ThemeResource ListViewItemTextBlockStyle}"
-                                    Margin="0,0,19,0"/>
-                                <TextBlock
-                                    Text="{Binding Description}"
-                                    TextWrapping="WrapWholeWords"
-                                    Pivot.SlideInAnimationGroup="2" 
-                                    CommonNavigationTransitionInfo.IsStaggerElement="True" 
-                                    Style="{ThemeResource ListViewItemContentTextBlockStyle}"
-                                    Margin="0,0,19,0"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+    <Grid x:Name="LayoutRoot">
+        <ProgressBar x:Name="LoadingBar" 
+                     IsIndeterminate="True" 
+                     Visibility="Collapsed" 
+                     VerticalAlignment="Top" 
+                     Margin="0,0,0,0"/>
+
+        <!-- ОСНОВНОЙ КОНТЕНТ (PIVOT) -->
+        <Pivot x:Name="MainPivot" Title="METROGOPHER" SelectionChanged="OnPivotSelectionChanged">
+
+            <!-- Вкладка 1: Gophermap / Каталог -->
+            <PivotItem Header="gopher">
+                <Grid Margin="12,0,12,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <AutoSuggestBox x:Name="AddressBox" 
+                                        VerticalAlignment="Center" 
+                                        FontSize="18"
+                                        SuggestionChosen="AddressBox_SuggestionChosen"
+                                        TextChanged="AddressBox_TextChanged"
+                                        PlaceholderText="gopher://..."/>
+
+                        <Button Grid.Column="1" 
+                                Click="OnGoClick" 
+                                Width="54" Height="54" 
+                                Margin="8,0,0,0" 
+                                Padding="0">
+                            <TextBlock Text="&#xE101;" FontFamily="Segoe UI Symbol" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Button>
+                    </Grid>
+
+                    <ListView x:Name="GopherList" 
+                              Grid.Row="1" 
+                              IsItemClickEnabled="True" 
+                              ItemClick="OnGopherItemClicked" 
+                              SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <!-- Уменьшены вертикальные отступы между строками меню -->
+                                <Grid Margin="0,2,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="34"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" 
+                                               Text="{Binding Symbol}" 
+                                               FontFamily="Segoe UI Symbol" 
+                                               FontSize="20" 
+                                               Foreground="{ThemeResource PhoneAccentBrush}" 
+                                               VerticalAlignment="Top"/>
+                                    <TextBlock Grid.Column="1" 
+                                               Text="{Binding Title}" 
+                                               FontSize="17" 
+                                               TextWrapping="Wrap" 
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
             </PivotItem>
 
-            <!--Pivot item two-->
-            <PivotItem
-                x:Uid="PivotItem2"
-                Margin="19,14.5,0,0"
-                Header="second"
-                DataContext="{Binding SecondGroup}"
-                d:DataContext="{Binding Groups[1], Source={d:DesignData Source=/DataModel/SampleData.json, Type=data:SampleDataSource}}">
-                <!--Double line list no text wrapping-->
-                <ListView
-                    ItemsSource="{Binding Items}"
-                    IsItemClickEnabled="True"
-                    ItemClick="ItemView_ItemClick"
-                    Loaded="SecondPivot_Loaded"
-                    ContinuumNavigationTransitionInfo.ExitElementContainer="True">
+            <!-- Вкладка 2: Закладки -->
+            <PivotItem Header="bookmarks">
+                <Grid Margin="12,0,12,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <ListView x:Name="BookmarksList" 
+                              Grid.Row="0" 
+                              SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Button Grid.Column="0" 
+                                            Click="OnBookmarkSelected" 
+                                            Tag="{Binding}" 
+                                            HorizontalAlignment="Stretch" 
+                                            HorizontalContentAlignment="Left" 
+                                            Background="Transparent" 
+                                            BorderThickness="0" 
+                                            Padding="0">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" FontSize="22" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Host}" FontSize="13" Foreground="{ThemeResource PhoneAccentBrush}"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <Button Grid.Column="1" 
+                                            Click="OnDeleteBookmarkClick" 
+                                            Tag="{Binding}" 
+                                            Width="44" Height="44" 
+                                            Background="Transparent" 
+                                            BorderThickness="0">
+                                        <TextBlock Text="&#xE107;" FontFamily="Segoe UI Symbol" FontSize="18" Foreground="{ThemeResource PhoneMidBrush}"/>
+                                    </Button>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <Button Grid.Row="1" Content="clear bookmarks" Click="OnClearBookmarksClick" HorizontalAlignment="Stretch" Margin="0,8,0,8"/>
+                </Grid>
+            </PivotItem>
+
+            <!-- Вкладка 3: История -->
+            <PivotItem Header="history">
+                <Grid Margin="12,0,12,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <ListView x:Name="HistoryList" Grid.Row="0" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Button Grid.Column="0" 
+                                            Click="OnHistorySelected" 
+                                            Tag="{Binding}" 
+                                            HorizontalAlignment="Stretch" 
+                                            HorizontalContentAlignment="Left" 
+                                            Background="Transparent" 
+                                            BorderThickness="0" 
+                                            Padding="0">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Path}" FontSize="20" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Host}" FontSize="13" Foreground="{ThemeResource PhoneAccentBrush}"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <Button Grid.Column="1" 
+                                            Click="OnDeleteHistoryItemClick" 
+                                            Tag="{Binding}" 
+                                            Width="44" Height="44" 
+                                            Background="Transparent" 
+                                            BorderThickness="0">
+                                        <TextBlock Text="&#xE107;" FontFamily="Segoe UI Symbol" FontSize="18" Foreground="{ThemeResource PhoneMidBrush}"/>
+                                    </Button>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <Button Grid.Row="1" Content="clear history" Click="OnClearHistoryClick" HorizontalAlignment="Stretch" Margin="0,8,0,8"/>
+                </Grid>
+            </PivotItem>
+
+            <!-- Вкладка 4: Просмотр документа -->
+            <PivotItem Header="document" x:Name="PivotDocument">
+                <ListView x:Name="DocumentListBox" Margin="10,0,10,0" SelectionMode="None">
                     <ListView.ItemTemplate>
                         <DataTemplate>
-                            <StackPanel Margin="0,0,0,9.5">
-                                <TextBlock
-                                    Text="{Binding Title}"
-                                    Pivot.SlideInAnimationGroup="1"
-                                    CommonNavigationTransitionInfo.IsStaggerElement="True"
-                                    Style="{StaticResource ListViewItemTextBlockStyle}"/>
-                                <TextBlock
-                                    Text="{Binding Description}"
-                                    Pivot.SlideInAnimationGroup="2"
-                                    CommonNavigationTransitionInfo.IsStaggerElement="True"
-                                    Style="{StaticResource ListViewItemContentTextBlockStyle}"/>
-                            </StackPanel>
+                            <!-- Убраны лишние межстрочные интервалы для плотного вывода ASCII и текста -->
+                            <TextBlock Text="{Binding Text}" 
+                                       FontFamily="Consolas" 
+                                       FontSize="{Binding FontSize}" 
+                                       LineHeight="{Binding LineHeight}" 
+                                       Margin="0,0,0,0"
+                                       TextWrapping="{Binding WrappingMode}"/>
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
@@ -94,12 +197,10 @@
     </Grid>
 
     <Page.BottomAppBar>
-        <CommandBar>
-            <AppBarButton x:Uid="AddAppBarButton" x:Name="AddAppBarButton" Label="add" Icon="Add" Click="AddAppBarButton_Click" />
-            <CommandBar.SecondaryCommands>
-                <AppBarButton x:Uid="SecondaryButton1" x:Name="SecondaryButton1" Label="secondary command 1" />
-                <AppBarButton x:Uid="SecondaryButton2" x:Name="SecondaryButton2" Label="secondary command 2" />
-            </CommandBar.SecondaryCommands>
+        <CommandBar Background="#1F1F1F" Foreground="White">
+            <AppBarButton Icon="Refresh" Label="refresh" Click="OnRefreshClick" />
+            <AppBarButton Icon="Home" Label="home" Click="OnHomeClick" />
+            <AppBarButton Icon="Add" Label="bookmark" Click="OnBookmarkClick" />
         </CommandBar>
     </Page.BottomAppBar>
 </Page>
