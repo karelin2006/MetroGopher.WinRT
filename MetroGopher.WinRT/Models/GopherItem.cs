@@ -14,7 +14,7 @@ namespace MetroGopher.WinRT.Models
         Search,     // '7'
         Telnet,     // '8'
         Binary,     // '9'
-        Redundant,  // '+' (дублирующий сервер)
+        Redundant,  // '+'
         Tn3270,     // 'T'
         Image,      // 'g', 'I', ':', 'p', 'P'
         Audio,      // 's', 'S', '<'
@@ -49,7 +49,7 @@ namespace MetroGopher.WinRT.Models
                 {
                     case GopherItemType.Directory: return "\uE188"; // Папка
                     case GopherItemType.TextFile: return "\uE160"; // Документ
-                    case GopherItemType.Search: return "\uE11A"; // Лупа
+                    case GopherItemType.Search: return "\uE11A"; // Поиск
                     case GopherItemType.Image: return "\uE114"; // Картинка
                     case GopherItemType.Audio: return "\uE189"; // Звук / медиа
                     case GopherItemType.Video: return "\uE116"; // Видео
@@ -60,7 +60,7 @@ namespace MetroGopher.WinRT.Models
                     case GopherItemType.Uuencoded:
                     case GopherItemType.Document: return "\uE118"; // Загрузка / файл
                     case GopherItemType.Telnet:
-                    case GopherItemType.Tn3270: return "\uE1D1"; // Терминал / консоль
+                    case GopherItemType.Tn3270: return "\uE1D1"; // Терминал
                     case GopherItemType.CSOPhone: return "\uE13A"; // Телефонная книга
                     case GopherItemType.Error: return "\uE10A"; // Ошибка
                     default: return string.Empty;

@@ -40,9 +40,6 @@ namespace MetroGopher.WinRT.Services
             return ParseMenu(rawResponse, host, port);
         }
 
-        /// <summary>
-        /// Скачивание бинарного файла напрямую в хранилище без падений по размеру буфера
-        /// </summary>
         public async Task<StorageFile> DownloadBinaryToFileAsync(string host, int port, string selector, string targetFileName)
         {
             if (string.IsNullOrWhiteSpace(host))
@@ -206,7 +203,19 @@ namespace MetroGopher.WinRT.Services
 
                 var itemType = MapType(typeChar);
 
-                if (itemType == GopherItemType.HtmlLink && selector.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
+                // Определение аудио по расширению в селекторе
+                if (itemType != GopherItemType.Audio && IsAudioExtension(selector))
+                {
+                    itemType = GopherItemType.Audio;
+                }
+
+                // Определение HTML / Web ссылок по селектору
+                if (selector.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
+                {
+                    itemType = GopherItemType.HtmlLink;
+                    selector = selector.Substring(4);
+                }
+                else if (itemType == GopherItemType.HtmlLink && selector.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
                 {
                     selector = selector.Substring(4);
                 }
@@ -218,7 +227,6 @@ namespace MetroGopher.WinRT.Services
                         selector = lastNonRedundantItem.Selector;
                 }
 
-                // Схлопываем серии пустых информационных строк
                 bool isEmptyInfo = (itemType == GopherItemType.Info) && string.IsNullOrWhiteSpace(title);
                 if (isEmptyInfo && previousWasEmptyInfo)
                 {
@@ -245,6 +253,15 @@ namespace MetroGopher.WinRT.Services
             }
 
             return items;
+        }
+
+        private bool IsAudioExtension(string selector)
+        {
+            if (string.IsNullOrWhiteSpace(selector)) return false;
+            string lower = selector.ToLowerInvariant();
+            return lower.EndsWith(".mp3") || lower.EndsWith(".wav") ||
+                   lower.EndsWith(".ogg") || lower.EndsWith(".flac") ||
+                   lower.EndsWith(".aac") || lower.EndsWith(".m4a");
         }
 
         public string CleanTextContent(string raw)

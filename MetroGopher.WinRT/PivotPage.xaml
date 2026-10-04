@@ -6,9 +6,9 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    Background="Black">
 
-    <Grid x:Name="LayoutRoot">
+    <Grid x:Name="LayoutRoot" Background="Black">
         <ProgressBar x:Name="LoadingBar" 
                      IsIndeterminate="True" 
                      Visibility="Collapsed" 
@@ -55,7 +55,6 @@
                               SelectionMode="None">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <!-- Уменьшены вертикальные отступы между строками меню -->
                                 <Grid Margin="0,2,0,2">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="34"/>
@@ -70,6 +69,7 @@
                                     <TextBlock Grid.Column="1" 
                                                Text="{Binding Title}" 
                                                FontSize="17" 
+                                               Foreground="White"
                                                TextWrapping="Wrap" 
                                                VerticalAlignment="Center"/>
                                 </Grid>
@@ -107,7 +107,7 @@
                                             BorderThickness="0" 
                                             Padding="0">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding Title}" FontSize="22" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Title}" FontSize="22" Foreground="White" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding Host}" FontSize="13" Foreground="{ThemeResource PhoneAccentBrush}"/>
                                         </StackPanel>
                                     </Button>
@@ -155,7 +155,7 @@
                                             BorderThickness="0" 
                                             Padding="0">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding Path}" FontSize="20" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Selector}" FontSize="20" Foreground="White" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding Host}" FontSize="13" Foreground="{ThemeResource PhoneAccentBrush}"/>
                                         </StackPanel>
                                     </Button>
@@ -178,20 +178,21 @@
             </PivotItem>
 
             <!-- Вкладка 4: Просмотр документа -->
-            <PivotItem Header="document" x:Name="PivotDocument">
-                <ListView x:Name="DocumentListBox" Margin="10,0,10,0" SelectionMode="None">
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <!-- Убраны лишние межстрочные интервалы для плотного вывода ASCII и текста -->
-                            <TextBlock Text="{Binding Text}" 
-                                       FontFamily="Consolas" 
-                                       FontSize="{Binding FontSize}" 
-                                       LineHeight="{Binding LineHeight}" 
-                                       Margin="0,0,0,0"
-                                       TextWrapping="{Binding WrappingMode}"/>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+            <PivotItem Header="document" x:Name="PivotDocument" Background="Black">
+                <ScrollViewer x:Name="DocumentScrollViewer"
+                              Margin="12,0,12,0"
+                              Background="Black"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              ZoomMode="Disabled">
+                    <ItemsControl x:Name="DocumentListBox">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ContentPresenter Content="{Binding}" Margin="0"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
             </PivotItem>
         </Pivot>
     </Grid>

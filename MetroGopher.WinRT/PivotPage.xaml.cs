@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Windows.Data.Xml.Dom;
 using Windows.Foundation.Collections;
@@ -10,10 +12,13 @@ using Windows.Media.Playback;
 using Windows.Phone.UI.Input;
 using Windows.Storage;
 using Windows.System;
+using Windows.UI;
 using Windows.UI.Notifications;
 using Windows.UI.Popups;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Documents;
+using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Navigation;
 using MetroGopher.WinRT.Models;
 using MetroGopher.WinRT.Services;
@@ -36,6 +41,7 @@ namespace MetroGopher.WinRT
         // Альбомный плейлист текущей папки
         private readonly List<GopherItem> _currentPlaylist = new List<GopherItem>();
         private int _currentTrackIndex = -1;
+        private bool _isMediaPlayerSubscribed = false;
 
         private readonly string[] _knownGopherServers =
         {
@@ -45,9 +51,11 @@ namespace MetroGopher.WinRT
             "gopher.tildeverse.org", "gopher.icu", "gopher.top", "phreaknet.org", "gopher.space"
         };
 
+        private static readonly Regex UrlRegex = new Regex(@"(gopher://[^\s<>""']+|https?://[^\s<>""']+|git://[^\s<>""']+|www\.[^\s<>""']+|github\.com/[^\s<>""']+)", RegexOptions.IgnoreCase);
+
         public ObservableCollection<GopherBookmark> Bookmarks { get; set; }
         public ObservableCollection<GopherHistoryItem> History { get; set; }
-        private ObservableCollection<GopherItem> _gopherItems = new ObservableCollection<GopherItem>();
+        private readonly ObservableCollection<GopherItem> _gopherItems = new ObservableCollection<GopherItem>();
 
         private const string BookmarksKey = "SavedBookmarks";
         private const string HistoryKey = "SavedHistory";
@@ -69,7 +77,6 @@ namespace MetroGopher.WinRT
             BookmarksList.ItemsSource = Bookmarks;
             HistoryList.ItemsSource = History;
 
-            BackgroundMediaPlayer.MessageReceivedFromBackground += OnMediaPlayerMessageReceived;
             HardwareButtons.BackPressed += HardwareButtons_BackPressed;
 
             LoadGopherPage(_currentHost, _currentPort, _currentSelector);
@@ -110,55 +117,128 @@ namespace MetroGopher.WinRT
                 return;
             }
 
-            var rawLines = text.Split(new[] { '\n' }, StringSplitOptions.None);
-            bool isAsciiMap = DetectIfAsciiMap(rawLines);
+            DocumentListBox.ItemTemplate = null;
 
-            var items = new List<FormattedTextLine>();
+            var rawLines = text.Split(new[] { '\n' }, StringSplitOptions.None);
+            var visualItems = new List<UIElement>(rawLines.Length);
+
             bool previousWasEmpty = false;
 
             foreach (var rawLine in rawLines)
             {
                 string line = rawLine.TrimEnd('\r');
+
+                // Нормализация табуляции во избежание сдвига вправо
+                if (line.Contains("\t"))
+                {
+                    line = line.Replace("\t", "    ");
+                }
+
                 bool isEmpty = string.IsNullOrWhiteSpace(line);
 
-                // Если уже была пустая строка, вторую и последующие подряд отбрасываем
                 if (isEmpty && previousWasEmpty)
                 {
                     continue;
                 }
 
-                items.Add(new FormattedTextLine
-                {
-                    Text = line,
-                    IsAsciiArt = isAsciiMap
-                });
-
+                visualItems.Add(BuildLineElement(line));
                 previousWasEmpty = isEmpty;
             }
 
-            DocumentListBox.ItemsSource = items;
+            DocumentListBox.ItemsSource = visualItems;
             MainPivot.SelectedItem = PivotDocument;
         }
 
-        private bool DetectIfAsciiMap(string[] lines)
+        private UIElement BuildLineElement(string line)
         {
-            int asciiIndicators = 0;
-            int sampleCount = Math.Min(lines.Length, 60);
-
-            for (int i = 0; i < sampleCount; i++)
+            if (string.IsNullOrEmpty(line))
             {
-                string line = lines[i];
-                if (string.IsNullOrWhiteSpace(line)) continue;
+                return new Border { Height = 8 };
+            }
 
-                int mapChars = line.Count(c => c == '=' || c == '|' || c == '+' || c == '-' || c == '/' || c == '\\' || c == '[' || c == ']' || c == '<' || c == '>');
+            var whiteBrush = new SolidColorBrush(Colors.White);
 
-                if (mapChars >= 6 || line.Contains("===") || line.Contains("---") || line.Contains("..."))
+            var tb = new TextBlock
+            {
+                Margin = new Thickness(0),
+                Padding = new Thickness(0),
+                Foreground = whiteBrush,
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                FontFamily = new FontFamily("Consolas, Courier New"),
+                FontSize = 12.0,
+                LineHeight = 14.5,
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight
+            };
+
+            var matches = UrlRegex.Matches(line);
+
+            if (matches.Count == 0)
+            {
+                tb.Text = line;
+            }
+            else
+            {
+                int currentIndex = 0;
+                foreach (Match match in matches)
                 {
-                    asciiIndicators++;
+                    if (match.Index > currentIndex)
+                    {
+                        tb.Inlines.Add(new Run
+                        {
+                            Text = line.Substring(currentIndex, match.Index - currentIndex),
+                            Foreground = whiteBrush
+                        });
+                    }
+
+                    string rawUrl = match.Value;
+                    var link = new Hyperlink
+                    {
+                        Foreground = (SolidColorBrush)Application.Current.Resources["PhoneAccentBrush"]
+                    };
+
+                    link.Inlines.Add(new Run
+                    {
+                        Text = rawUrl,
+                        FontFamily = new FontFamily("Consolas, Courier New"),
+                        FontSize = 12.0
+                    });
+
+                    link.Click += async (s, e) =>
+                    {
+                        await RouteLinkAsync(rawUrl);
+                    };
+
+                    tb.Inlines.Add(link);
+                    currentIndex = match.Index + match.Length;
+                }
+
+                if (currentIndex < line.Length)
+                {
+                    tb.Inlines.Add(new Run
+                    {
+                        Text = line.Substring(currentIndex),
+                        Foreground = whiteBrush
+                    });
                 }
             }
 
-            return asciiIndicators > (sampleCount * 0.15);
+            return tb;
+        }
+
+        private async Task RouteLinkAsync(string rawUrl)
+        {
+            if (string.IsNullOrWhiteSpace(rawUrl)) return;
+            string clean = rawUrl.Trim();
+
+            if (clean.StartsWith("gopher://", StringComparison.OrdinalIgnoreCase))
+            {
+                MainPivot.SelectedIndex = 0;
+                ExecuteAddressNavigation(clean);
+                return;
+            }
+
+            await OpenExternalWebUriAsync(clean);
         }
 
         #endregion
@@ -167,81 +247,92 @@ namespace MetroGopher.WinRT
 
         private void LoadData()
         {
-            var settings = ApplicationData.Current.LocalSettings.Values;
-
-            if (settings.ContainsKey(BookmarksKey))
+            try
             {
-                string savedBookmarks = settings[BookmarksKey] as string;
-                if (!string.IsNullOrEmpty(savedBookmarks))
+                var settings = ApplicationData.Current.LocalSettings.Values;
+
+                if (settings.ContainsKey(BookmarksKey))
                 {
-                    Bookmarks.Clear();
-                    string[] lines = savedBookmarks.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var item in lines)
+                    string savedBookmarks = settings[BookmarksKey] as string;
+                    if (!string.IsNullOrEmpty(savedBookmarks))
                     {
-                        var parts = item.Split('|');
-                        if (parts.Length >= 5)
+                        Bookmarks.Clear();
+                        string[] lines = savedBookmarks.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var item in lines)
                         {
-                            int port;
-                            if (!int.TryParse(parts[2], out port) || port <= 0)
-                                port = 70;
-
-                            GopherItemType itemType = GopherItemType.Directory;
-                            try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[4]); } catch { }
-
-                            Bookmarks.Add(new GopherBookmark
+                            var parts = item.Split('|');
+                            if (parts.Length >= 5)
                             {
-                                Title = parts[0],
-                                Host = parts[1],
-                                Port = port,
-                                Selector = parts[3],
-                                ItemType = itemType
-                            });
+                                int port;
+                                if (!int.TryParse(parts[2], out port) || port <= 0)
+                                    port = 70;
+
+                                GopherItemType itemType = GopherItemType.Directory;
+                                try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[4]); } catch { }
+
+                                Bookmarks.Add(new GopherBookmark
+                                {
+                                    Title = parts[0],
+                                    Host = parts[1],
+                                    Port = port,
+                                    Selector = parts[3],
+                                    ItemType = itemType
+                                });
+                            }
+                        }
+                    }
+                }
+
+                if (settings.ContainsKey(HistoryKey))
+                {
+                    string savedHistory = settings[HistoryKey] as string;
+                    if (!string.IsNullOrEmpty(savedHistory))
+                    {
+                        History.Clear();
+                        string[] lines = savedHistory.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var item in lines)
+                        {
+                            var parts = item.Split('|');
+                            if (parts.Length >= 3)
+                            {
+                                int port;
+                                if (!int.TryParse(parts[1], out port) || port <= 0)
+                                    port = 70;
+
+                                GopherItemType itemType = GopherItemType.Directory;
+                                if (parts.Length >= 4)
+                                {
+                                    try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[3]); } catch { }
+                                }
+
+                                History.Add(new GopherHistoryItem { Host = parts[0], Port = port, Selector = parts[2], ItemType = itemType });
+                            }
                         }
                     }
                 }
             }
-
-            if (settings.ContainsKey(HistoryKey))
+            catch (Exception ex)
             {
-                string savedHistory = settings[HistoryKey] as string;
-                if (!string.IsNullOrEmpty(savedHistory))
-                {
-                    History.Clear();
-                    string[] lines = savedHistory.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var item in lines)
-                    {
-                        var parts = item.Split('|');
-                        if (parts.Length >= 3)
-                        {
-                            int port;
-                            if (!int.TryParse(parts[1], out port) || port <= 0)
-                                port = 70;
-
-                            GopherItemType itemType = GopherItemType.Directory;
-                            if (parts.Length >= 4)
-                            {
-                                try { itemType = (GopherItemType)Enum.Parse(typeof(GopherItemType), parts[3]); } catch { }
-                            }
-
-                            History.Add(new GopherHistoryItem { Host = parts[0], Port = port, Selector = parts[2], ItemType = itemType });
-                        }
-                    }
-                }
+                Debug.WriteLine("[SETTINGS] LoadData error: " + ex.Message);
             }
         }
 
         private void SaveData()
         {
-            var settings = ApplicationData.Current.LocalSettings.Values;
+            try
+            {
+                var settings = ApplicationData.Current.LocalSettings.Values;
 
-            string bookmarksPayload = string.Join("\n", Bookmarks.Select(b =>
-                string.Format("{0}|{1}|{2}|{3}|{4}", b.Title, b.Host, b.Port, b.Selector, b.ItemType)));
+                string bookmarksPayload = string.Join("\n", Bookmarks.Select(b =>
+                    string.Format("{0}|{1}|{2}|{3}|{4}", b.Title, b.Host, b.Port, b.Selector, b.ItemType)));
 
-            string historyPayload = string.Join("\n", History.Select(h =>
-                string.Format("{0}|{1}|{2}|{3}", h.Host, h.Port, h.Selector, h.ItemType)));
+                string historyPayload = string.Join("\n", History.Select(h =>
+                    string.Format("{0}|{1}|{2}|{3}", h.Host, h.Port, h.Selector, h.ItemType)));
 
-            settings[BookmarksKey] = bookmarksPayload;
-            settings[HistoryKey] = historyPayload;
+                settings[BookmarksKey] = bookmarksPayload;
+                settings[HistoryKey] = historyPayload;
+            }
+            catch { }
         }
 
         private void SaveToPermanentHistory(string host, int port, string selector, GopherItemType type)
@@ -299,6 +390,13 @@ namespace MetroGopher.WinRT
         private void ExecuteAddressNavigation(string input)
         {
             if (string.IsNullOrWhiteSpace(input)) return;
+
+            if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                input.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                Task.Run(async () => await OpenExternalWebUriAsync(input));
+                return;
+            }
 
             if (!input.Contains(".") && !input.Contains(":") && !input.Contains("/"))
             {
@@ -404,6 +502,21 @@ namespace MetroGopher.WinRT
             var item = e.ClickedItem as GopherItem;
             if (item == null) return;
 
+            if (!string.IsNullOrEmpty(item.Selector) &&
+                (item.Selector.StartsWith("URL:", StringComparison.OrdinalIgnoreCase) ||
+                 item.Selector.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                 item.Selector.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+            {
+                await OpenExternalWebUriAsync(item.Selector);
+                return;
+            }
+
+            if (item.ItemType == GopherItemType.Audio)
+            {
+                await PlayAudioAsync(item);
+                return;
+            }
+
             switch (item.ItemType)
             {
                 case GopherItemType.Directory:
@@ -412,14 +525,11 @@ namespace MetroGopher.WinRT
                 case GopherItemType.TextFile:
                     await OpenTextFileAsync(item);
                     break;
-                case GopherItemType.Audio:
-                    await PlayAudioAsync(item);
-                    break;
                 case GopherItemType.Search:
                     ShowSearchDialog(item);
                     break;
                 case GopherItemType.HtmlLink:
-                    OpenWebLink(item);
+                    await OpenExternalWebUriAsync(item.Selector);
                     break;
                 case GopherItemType.Telnet:
                     OpenTelnet(item);
@@ -432,7 +542,23 @@ namespace MetroGopher.WinRT
 
         #endregion
 
-        #region Фоновое аудио (Кэширование + Предзагрузка + Toast)
+        #region Фоновое аудио
+
+        private void EnsureMediaPlayerSubscribed()
+        {
+            if (!_isMediaPlayerSubscribed)
+            {
+                try
+                {
+                    BackgroundMediaPlayer.MessageReceivedFromBackground += OnMediaPlayerMessageReceived;
+                    _isMediaPlayerSubscribed = true;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[UI] Ошибка подписки на BackgroundMediaPlayer: " + ex.Message);
+                }
+            }
+        }
 
         private void ShowTrackToast(string title, string artist)
         {
@@ -443,7 +569,6 @@ namespace MetroGopher.WinRT
                 textNodes[0].AppendChild(toastXml.CreateTextNode("▶ " + (title ?? "Audio Track")));
                 textNodes[1].AppendChild(toastXml.CreateTextNode(artist ?? "MetroGopher"));
 
-                // Отключаем звук тоста, чтобы не глушить воспроизводимую музыку
                 var audioElement = toastXml.CreateElement("audio");
                 audioElement.SetAttribute("silent", "true");
                 toastXml.DocumentElement.AppendChild(audioElement);
@@ -525,7 +650,13 @@ namespace MetroGopher.WinRT
 
             try
             {
-                // Загружаем из локального дискового кэша или быстро скачиваем
+                // Инициируем пробуждение процесса BackgroundPlayback параллельно со скачиванием
+                EnsureMediaPlayerSubscribed();
+                var wakeUpTask = Task.Run(() =>
+                {
+                    try { var dummy = BackgroundMediaPlayer.Current.CurrentState; } catch { }
+                });
+
                 StorageFile trackFile = await GetOrDownloadTrackAsync(targetTrack);
 
                 var fileProps = await trackFile.GetBasicPropertiesAsync();
@@ -536,8 +667,7 @@ namespace MetroGopher.WinRT
                     return;
                 }
 
-                // Гарантируем запуск фонового процесса
-                var dummyState = BackgroundMediaPlayer.Current.CurrentState;
+                await wakeUpTask;
 
                 var msg = new ValueSet();
                 msg.Add("command", "play");
@@ -545,12 +675,22 @@ namespace MetroGopher.WinRT
                 msg.Add("title", targetTrack.Title ?? "Audio Track");
                 msg.Add("artist", targetTrack.Host ?? "Gopher Server");
 
-                BackgroundMediaPlayer.SendMessageToBackground(msg);
+                // Гарантированная отправка команды в просыпающийся фоновый процесс
+                bool sent = false;
+                for (int attempt = 0; attempt < 4 && !sent; attempt++)
+                {
+                    try
+                    {
+                        BackgroundMediaPlayer.SendMessageToBackground(msg);
+                        sent = true;
+                    }
+                    catch
+                    {
+                        await Task.Delay(200);
+                    }
+                }
 
-                // Показываем тихое системное уведомление сверху
                 ShowTrackToast(targetTrack.Title, targetTrack.Host);
-
-                // Запускаем предзагрузку следующего трека в фоне
                 PrefetchNextTrack();
             }
             catch (Exception ex)
@@ -639,19 +779,48 @@ namespace MetroGopher.WinRT
 
         private async void OpenWebLink(GopherItem item)
         {
-            string url = item.Selector;
-            if (string.IsNullOrWhiteSpace(url)) return;
+            if (item == null || string.IsNullOrWhiteSpace(item.Selector)) return;
+            await OpenExternalWebUriAsync(item.Selector);
+        }
 
-            if (url.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
-                url = url.Substring(4);
+        private async Task OpenExternalWebUriAsync(string rawUrl)
+        {
+            if (string.IsNullOrWhiteSpace(rawUrl)) return;
 
-            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                url = "http://" + url;
+            string clean = rawUrl.Trim();
 
-            Uri uri;
-            if (Uri.TryCreate(url, UriKind.Absolute, out uri))
+            if (clean.StartsWith("URL:", StringComparison.OrdinalIgnoreCase))
             {
-                await Launcher.LaunchUriAsync(uri);
+                clean = clean.Substring(4).Trim();
+            }
+
+            if (clean.Contains("\t"))
+            {
+                clean = clean.Split('\t')[0].Trim();
+            }
+
+            if (clean.StartsWith("git://", StringComparison.OrdinalIgnoreCase))
+            {
+                clean = "https://" + clean.Substring(6);
+            }
+
+            if (!clean.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !clean.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                clean = "https://" + clean;
+            }
+
+            try
+            {
+                Uri targetUri;
+                if (Uri.TryCreate(clean, UriKind.Absolute, out targetUri))
+                {
+                    await Launcher.LaunchUriAsync(targetUri);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[BROWSER] Ошибка открытия браузера: " + ex.Message);
             }
         }
 
